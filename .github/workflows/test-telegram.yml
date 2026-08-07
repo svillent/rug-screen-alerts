@@ -12,8 +12,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          echo "Token length: ${#TELEGRAM_BOT_TOKEN}"
-          echo "Chat ID: $TELEGRAM_CHAT_ID"
-          curl -v -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+          CLEAN_TOKEN=$(printf '%s' "$TELEGRAM_BOT_TOKEN" | tr -d '[:space:]')
+          CLEAN_CHAT_ID=$(printf '%s' "$TELEGRAM_CHAT_ID" | tr -d '[:space:]')
+          echo "Cleaned token length: ${#CLEAN_TOKEN}"
+          echo "Cleaned chat id length: ${#CLEAN_CHAT_ID}"
+          curl -X POST "https://api.telegram.org/bot${CLEAN_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "{\"chat_id\": \"${TELEGRAM_CHAT_ID}\", \"text\": \"Test alert - bot is working\"}"
+            -d "{\"chat_id\": \"${CLEAN_CHAT_ID}\", \"text\": \"Test alert - bot is working\"}"
