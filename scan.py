@@ -92,15 +92,23 @@ def main():
             dex_pair = None
 
         # age check — uses confirmed real fields: RugCheck's detectedAt (ms),
-        # falling back to Dexscreener's pairCreatedAt (ms) if missing
-        age_ms_timestamp = report.get("detectedAt") or (dex_pair or {}).get("pairCreatedAt")
+        # falling back to Dexscreener's pairCreatedAt (ms) if missing.
+        # Values are coerced to float since some APIs return numeric fields as strings.
+        raw_age_value = report.get("detectedAt") or (dex_pair or {}).get("pairCreatedAt")
+        age_ms_timestamp = None
+        if raw_age_value is not None:
+            try:
+                age_ms_timestamp = float(raw_age_value)
+            except (TypeError, ValueError):
+                age_ms_timestamp = None
+
         if age_ms_timestamp:
             age_minutes = (time.time() * 1000 - age_ms_timestamp) / 60000
             if age_minutes > MAX_AGE_MINUTES:
                 print(f"  {mint}: skip (age {age_minutes:.1f}m > {MAX_AGE_MINUTES}m limit)")
                 continue
         else:
-            print(f"  {mint}: no age data available, skipping to be safe")
+            print(f"  {mint}: no usable age data, skipping to be safe")
             continue
 
         market_cap = None
