@@ -79,13 +79,6 @@ def main():
         mint = c["mint"]
         seen.add(mint)
 
-        created_at = c.get("createdAt")
-        if created_at:
-            age_minutes = (time.time() * 1000 - created_at) / 60000
-            if age_minutes > MAX_AGE_MINUTES:
-                print(f"  {mint}: skip (age {age_minutes:.1f}m > {MAX_AGE_MINUTES}m limit)")
-                continue
-
         try:
             report = http_get(f"https://api.rugcheck.xyz/v1/tokens/{mint}/report")
         except Exception as e:
@@ -97,6 +90,18 @@ def main():
             dex_pair = (dex.get("pairs") or [None])[0]
         except Exception:
             dex_pair = None
+
+        # age check — uses confirmed real fields: RugCheck's detectedAt (ms),
+        # falling back to Dexscreener's pairCreatedAt (ms) if missing
+        age_ms_timestamp = report.get("detectedAt") or (dex_pair or {}).get("pairCreatedAt")
+        if age_ms_timestamp:
+            age_minutes = (time.time() * 1000 - age_ms_timestamp) / 60000
+            if age_minutes > MAX_AGE_MINUTES:
+                print(f"  {mint}: skip (age {age_minutes:.1f}m > {MAX_AGE_MINUTES}m limit)")
+                continue
+        else:
+            print(f"  {mint}: no age data available, skipping to be safe")
+            continue
 
         market_cap = None
         if dex_pair:
