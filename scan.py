@@ -10,8 +10,9 @@ LP_LOCK_THRESHOLD = 80  # percent
 MAX_CHECKS_PER_RUN = 25
 STATE_FILE = "seen_mints.json"
 
-TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"].strip()
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"].strip()
+
 
 
 def http_get(url, timeout=15):
