@@ -7,12 +7,12 @@ import urllib.error
 # ---- config ----
 MCAP_CEILING = 80000
 LP_LOCK_THRESHOLD = 80  # percent
+MAX_AGE_MINUTES = 5
 MAX_CHECKS_PER_RUN = 25
 STATE_FILE = "seen_mints.json"
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"].strip()
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"].strip()
-
 
 
 def http_get(url, timeout=15):
@@ -44,6 +44,7 @@ def load_state():
 
 
 def save_state(seen):
+    # keep the file from growing forever — cap to last 5000 mints
     trimmed = list(seen)[-5000:]
     with open(STATE_FILE, "w") as f:
         json.dump(trimmed, f)
@@ -77,6 +78,14 @@ def main():
     for c in candidates:
         mint = c["mint"]
         seen.add(mint)
+
+        created_at = c.get("createdAt")
+        if created_at:
+            age_minutes = (time.time() * 1000 - created_at) / 60000
+            if age_minutes > MAX_AGE_MINUTES:
+                print(f"  {mint}: skip (age {age_minutes:.1f}m > {MAX_AGE_MINUTES}m limit)")
+                continue
+
         try:
             report = http_get(f"https://api.rugcheck.xyz/v1/tokens/{mint}/report")
         except Exception as e:
@@ -128,7 +137,7 @@ def main():
         else:
             print(f"  {symbol}: skip (mcap={market_cap}, lp={lp_locked_pct}, insiders={insider_count})")
 
-        time.sleep(0.5)
+        time.sleep(0.5)  # be gentle on rate limits
 
     save_state(seen)
     print(f"Done. {alerts_sent} alert(s) sent this run.")
