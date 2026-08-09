@@ -104,7 +104,9 @@ def main():
             except Exception:
                 dex_pair = None
 
-            # age check
+            # age check — best effort only. If neither source has usable age
+            # data (common for pump.fun tokens pre-migration), we do NOT skip;
+            # we just can't apply this particular filter for this token.
             raw_age_value = report.get("detectedAt") or (dex_pair or {}).get("pairCreatedAt")
             age_ms_timestamp = None
             if raw_age_value is not None:
@@ -119,8 +121,7 @@ def main():
                     print(f"  {mint}: skip (age {age_minutes:.1f}m > {MAX_AGE_MINUTES}m limit)")
                     continue
             else:
-                print(f"  {mint}: no usable age data, skipping to be safe")
-                continue
+                print(f"  {mint}: no age data available, proceeding without age filter")
 
             # market cap
             market_cap = None
