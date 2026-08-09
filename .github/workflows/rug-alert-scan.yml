@@ -5,6 +5,10 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
+concurrency:
+  group: scan-state-commit
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -30,4 +34,5 @@ jobs:
           git config user.email "actions@github.com"
           git add seen_mints.json
           git diff --quiet --cached || git commit -m "update seen mints"
+          git pull --rebase origin main
           git push
