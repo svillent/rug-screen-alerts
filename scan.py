@@ -3,12 +3,14 @@ import json
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 
 # ---- config ----
 MCAP_CEILING = 80000
 LP_LOCK_THRESHOLD = 80  # percent
-MAX_AGE_MINUTES = 5
+MAX_AGE_MINUTES = 60
 MAX_CHECKS_PER_RUN = 25
+CLUSTER_WARNING_THRESHOLD = 5  # percent — flag if any single holder exceeds this
 STATE_FILE = "seen_mints.json"
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"].strip()
@@ -61,32 +63,81 @@ def fmt_usd(n):
     return f"${n:.2f}"
 
 
-def main():
-    seen = load_state()
+def gather_candidates(seen):
+    """Pull candidate mints from two independent discovery sources and merge them."""
+    candidates_by_mint = {}
 
+    # Source 1: RugCheck's new-token discovery feed
     try:
         new_tokens = http_get("https://api.rugcheck.xyz/v1/stats/new_tokens")
+        if isinstance(new_tokens, list):
+            raw = new_tokens
+        elif isinstance(new_tokens, dict):
+            raw = new_tokens.get("tokens", [])
+        else:
+            raw = []
+        for item in raw:
+            if isinstance(item, dict) and item.get("mint"):
+                candidates_by_mint[item["mint"]] = item
     except Exception as e:
-        print("Discovery feed failed:", e)
-        return
+        print("RugCheck discovery feed failed:", e)
 
-    if isinstance(new_tokens, list):
-        raw_candidates = new_tokens
-    elif isinstance(new_tokens, dict):
-        raw_candidates = new_tokens.get("tokens", [])
-    else:
-        raw_candidates = []
+    # Source 2: Dexscreener's latest token profiles feed, Solana only
+    try:
+        profiles = http_get("https://api.dexscreener.com/token-profiles/latest/v1")
+        if isinstance(profiles, list):
+            for item in profiles:
+                if (
+                    isinstance(item, dict)
+                    and item.get("chainId") == "solana"
+                    and item.get("tokenAddress")
+                ):
+                    mint = item["tokenAddress"]
+                    if mint not in candidates_by_mint:
+                        candidates_by_mint[mint] = {"mint": mint}
+    except Exception as e:
+        print("Dexscreener discovery feed failed:", e)
 
     candidates = [
-        c for c in raw_candidates
-        if isinstance(c, dict) and c.get("mint") and c["mint"] not in seen
+        c for mint, c in candidates_by_mint.items()
+        if mint not in seen
     ][:MAX_CHECKS_PER_RUN]
+
+    return candidates
+
+
+def get_cluster_warning(report):
+    """Check RugCheck's topHolders data for any single wallet above the warning threshold."""
+    top_holders = report.get("topHolders")
+    if not isinstance(top_holders, list) or not top_holders:
+        return None  # no data available, not a claim either way
+
+    max_pct = 0.0
+    for holder in top_holders:
+        if not isinstance(holder, dict):
+            continue
+        raw_pct = holder.get("pct")
+        try:
+            pct = float(raw_pct)
+        except (TypeError, ValueError):
+            continue
+        if pct > max_pct:
+            max_pct = pct
+
+    return max_pct
+
+
+def main():
+    seen = load_state()
+    candidates = gather_candidates(seen)
 
     print(f"Screening {len(candidates)} new candidate(s)...")
 
     alerts_sent = 0
     for c in candidates:
-        mint = c["mint"]
+        mint = c.get("mint")
+        if not mint:
+            continue
         seen.add(mint)
 
         try:
@@ -104,9 +155,8 @@ def main():
             except Exception:
                 dex_pair = None
 
-            # age check — best effort only. If neither source has usable age
-            # data (common for pump.fun tokens pre-migration), we do NOT skip;
-            # we just can't apply this particular filter for this token.
+            # age check — best effort. Missing data means we proceed without
+            # this particular filter rather than reject the token outright.
             raw_age_value = report.get("detectedAt") or (dex_pair or {}).get("pairCreatedAt")
             age_ms_timestamp = None
             if raw_age_value is not None:
@@ -153,6 +203,9 @@ def main():
             insider_networks = report.get("insiderNetworks") or graph_report.get("networks") or []
             insider_count = len(insider_networks) if isinstance(insider_networks, list) else 0
 
+            # top holder cluster check (informational, does not gate the alert)
+            max_holder_pct = get_cluster_warning(report)
+
             passes_liquidity = lp_locked_pct >= LP_LOCK_THRESHOLD
             passes_mcap = market_cap is not None and 0 < market_cap < MCAP_CEILING
             passes_insiders = insider_count == 0
@@ -165,14 +218,30 @@ def main():
             symbol = token_meta.get("symbol") or base_token.get("symbol") or "???"
 
             if passes_liquidity and passes_mcap and passes_insiders:
+                if max_holder_pct is None:
+                    cluster_line = "Top holder data: unavailable"
+                elif max_holder_pct > CLUSTER_WARNING_THRESHOLD:
+                    cluster_line = f"⚠️ Largest single holder: {max_holder_pct:.1f}% (above {CLUSTER_WARNING_THRESHOLD}% threshold)"
+                else:
+                    cluster_line = f"✅ Largest single holder: {max_holder_pct:.1f}% (below {CLUSTER_WARNING_THRESHOLD}% threshold)"
+
+                search_query = urllib.parse.quote(symbol if symbol != "???" else mint)
+                twitter_link = f"https://x.com/search?q={search_query}&src=typed_query"
+                telegram_buzz_link = f"https://www.google.com/search?q=site:t.me+{search_query}"
+                bubblemaps_link = f"https://v2.bubblemaps.io/sol/token/{mint}"
+
                 text = (
                     f"🚨 <b>{name} (${symbol})</b> passed screening\n\n"
                     f"Market cap: {fmt_usd(market_cap)}\n"
                     f"LP locked: {lp_locked_pct:.0f}%\n"
-                    f"Insider clusters detected: {insider_count}\n\n"
+                    f"Insider clusters detected: {insider_count}\n"
+                    f"{cluster_line}\n\n"
                     f"Mint: <code>{mint}</code>\n"
                     f"Chart: https://dexscreener.com/solana/{mint}\n"
-                    f"Full report: https://rugcheck.xyz/tokens/{mint}\n\n"
+                    f"Full report: https://rugcheck.xyz/tokens/{mint}\n"
+                    f"Bubblemaps (unverified link format — please confirm it loads): {bubblemaps_link}\n"
+                    f"X/Twitter search: {twitter_link}\n"
+                    f"Telegram mentions (via Google): {telegram_buzz_link}\n\n"
                     f"Heuristic screen only — not financial advice. DYOR."
                 )
                 send_telegram(text)
