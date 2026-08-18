@@ -1,3 +1,4 @@
+
 name: Rug Screen Alert Scan
 
 on:
@@ -5,12 +6,12 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
-concurrency:
-  group: scan-state-commit
-  cancel-in-progress: false
-
 permissions:
   contents: write
+
+concurrency:
+  group: rug-screen-scan
+  cancel-in-progress: false
 
 jobs:
   scan:
@@ -33,6 +34,4 @@ jobs:
           git config user.name "rug-screen-bot"
           git config user.email "actions@github.com"
           git add seen_mints.json
-          git diff --quiet --cached || git commit -m "update seen mints"
-          git pull --rebase origin main
-          git push
+          git diff --quiet --cached || git commit -m "update
