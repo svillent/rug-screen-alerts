@@ -1,4 +1,3 @@
-
 name: Rug Screen Alert Scan
 
 on:
@@ -31,7 +30,8 @@ jobs:
 
       - name: Commit updated state
         run: |
-          git config user.name "rug-screen-bot"
-          git config user.email "actions@github.com"
+          git config user.name rug-screen-bot
+          git config user.email actions@github.com
           git add seen_mints.json
-          git diff --quiet --cached || git commit -m "update
+          git diff --quiet --cached || git commit -m update_seen_mints
+          git push
