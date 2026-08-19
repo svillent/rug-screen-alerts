@@ -6,11 +6,11 @@ import urllib.error
 import urllib.parse
 
 # ---- config ----
-MCAP_CEILING = 80000
+MCAP_FLOOR = 10000  # minimum market cap — no ceiling anymore, per user's explicit choice
 LP_LOCK_THRESHOLD = 80  # percent
-MAX_AGE_MINUTES = 60
 MAX_CHECKS_PER_RUN = 25
 CLUSTER_WARNING_THRESHOLD = 5  # percent — flag if any single holder exceeds this
+EXCLUDED_DEX_SUBSTRINGS = ["raydium", "orca", "meteora"]  # best-effort case-insensitive match on dexId
 STATE_FILE = "seen_mints.json"
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"].strip()
@@ -155,25 +155,28 @@ def main():
             except Exception:
                 dex_pair = None
 
-            # age check — best effort. Missing data means we proceed without
-            # this particular filter rather than reject the token outright.
+            # age — no longer a filter (matching the imported preset, which has
+            # no age bound). We still compute it if available, purely for display.
             raw_age_value = report.get("detectedAt") or (dex_pair or {}).get("pairCreatedAt")
-            age_ms_timestamp = None
+            age_minutes = None
             if raw_age_value is not None:
                 try:
                     age_ms_timestamp = float(raw_age_value)
+                    age_minutes = (time.time() * 1000 - age_ms_timestamp) / 60000
                 except (TypeError, ValueError):
-                    age_ms_timestamp = None
+                    age_minutes = None
 
-            if age_ms_timestamp:
-                age_minutes = (time.time() * 1000 - age_ms_timestamp) / 60000
-                if age_minutes > MAX_AGE_MINUTES:
-                    print(f"  {mint}: skip (age {age_minutes:.1f}m > {MAX_AGE_MINUTES}m limit)")
-                    continue
-            else:
-                print(f"  {mint}: no age data available, proceeding without age filter")
+            # DEX exclusion — best-effort match on dexId, only applies if we
+            # actually have dex_pair data (bonding-curve tokens can't be checked
+            # yet and are allowed through rather than blocked on unknown data)
+            excluded_by_dex = False
+            if dex_pair:
+                raw_dex_id = dex_pair.get("dexId")
+                if isinstance(raw_dex_id, str):
+                    dex_id_lower = raw_dex_id.lower()
+                    excluded_by_dex = any(sub in dex_id_lower for sub in EXCLUDED_DEX_SUBSTRINGS)
 
-            # market cap
+            # market cap — floor only now, no ceiling
             market_cap = None
             if dex_pair:
                 raw_mcap = dex_pair.get("marketCap") or dex_pair.get("fdv")
@@ -207,8 +210,11 @@ def main():
             max_holder_pct = get_cluster_warning(report)
 
             passes_liquidity = lp_locked_pct >= LP_LOCK_THRESHOLD
-            passes_mcap = market_cap is not None and 0 < market_cap < MCAP_CEILING
-            passes_insiders = insider_count == 0
+            passes_mcap = market_cap is not None and market_cap >= MCAP_FLOOR
+            passes_dex = not excluded_by_dex
+            # NOTE: insider-cluster gate removed per explicit user decision —
+            # insider_count is still computed and shown in the alert as info,
+            # it just no longer blocks the alert from firing.
 
             token_meta = report.get("tokenMeta")
             token_meta = token_meta if isinstance(token_meta, dict) else {}
@@ -217,13 +223,16 @@ def main():
             name = token_meta.get("name") or base_token.get("name") or "Unknown"
             symbol = token_meta.get("symbol") or base_token.get("symbol") or "???"
 
-            if passes_liquidity and passes_mcap and passes_insiders:
+            if passes_liquidity and passes_mcap and passes_dex:
                 if max_holder_pct is None:
                     cluster_line = "Top holder data: unavailable"
                 elif max_holder_pct > CLUSTER_WARNING_THRESHOLD:
                     cluster_line = f"⚠️ Largest single holder: {max_holder_pct:.1f}% (above {CLUSTER_WARNING_THRESHOLD}% threshold)"
                 else:
                     cluster_line = f"✅ Largest single holder: {max_holder_pct:.1f}% (below {CLUSTER_WARNING_THRESHOLD}% threshold)"
+
+                insider_line = f"Insider clusters detected: {insider_count} (informational only — not blocking)"
+                age_line = f"Age: {age_minutes:.0f}m" if age_minutes is not None else "Age: unknown"
 
                 search_query = urllib.parse.quote(symbol if symbol != "???" else mint)
                 twitter_link = f"https://x.com/search?q={search_query}&src=typed_query"
@@ -232,9 +241,10 @@ def main():
 
                 text = (
                     f"🚨 <b>{name} (${symbol})</b> passed screening\n\n"
-                    f"Market cap: {fmt_usd(market_cap)}\n"
+                    f"Market cap: {fmt_usd(market_cap)} (floor ${MCAP_FLOOR:,}, no ceiling)\n"
                     f"LP locked: {lp_locked_pct:.0f}%\n"
-                    f"Insider clusters detected: {insider_count}\n"
+                    f"{age_line}\n"
+                    f"{insider_line}\n"
                     f"{cluster_line}\n\n"
                     f"Mint: <code>{mint}</code>\n"
                     f"Chart: https://dexscreener.com/solana/{mint}\n"
@@ -248,7 +258,7 @@ def main():
                 alerts_sent += 1
                 print(f"  {symbol}: ALERT SENT")
             else:
-                print(f"  {symbol}: skip (mcap={market_cap}, lp={lp_locked_pct}, insiders={insider_count})")
+                print(f"  {symbol}: skip (mcap={market_cap}, lp={lp_locked_pct}, excluded_dex={excluded_by_dex})")
 
         except Exception as e:
             print(f"  {mint}: unexpected error, skipping this token ({type(e).__name__}: {e})")
