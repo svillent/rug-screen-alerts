@@ -42,11 +42,13 @@ jobs:
         run: |
           git config user.name "rug-screen-bot"
           git config user.email "rug-screen-bot@users.noreply.github.com"
+          git fetch origin main
+          git reset --mixed origin/main
           git add .
           if git diff --cached --quiet; then
             echo "No changes to commit"
             exit 0
           fi
           git commit -m "update_seen_mints"
-          git pull --rebase origin main
-          git push
+          git push origin HEAD:main
+
