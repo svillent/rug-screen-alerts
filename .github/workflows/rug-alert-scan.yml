@@ -1,37 +1,50 @@
-name: Rug Screen Alert Scan
+name: scan
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch: {}
+    - cron: '*/15 * * * *'   # adjust to your actual schedule
+  workflow_dispatch:
+
+concurrency:
+  group: scan-state
+  cancel-in-progress: false
 
 permissions:
   contents: write
-
-concurrency:
-  group: rug-screen-scan
-  cancel-in-progress: false
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          python-version: "3.11"
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
 
       - name: Run scan
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scan.py
 
       - name: Commit updated state
         run: |
-          git config user.name rug-screen-bot
-          git config user.email actions@github.com
-          git add seen_mints.json
-          git diff --quiet --cached || git commit -m update_seen_mints
+          git config user.name "rug-screen-bot"
+          git config user.email "rug-screen-bot@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "update_seen_mints"
+          git pull --rebase origin main
           git push
+
