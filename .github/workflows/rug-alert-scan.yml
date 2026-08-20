@@ -34,6 +34,9 @@ jobs:
 
       - name: Run scan
         run: python scan.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
       - name: Commit updated state
         run: |
@@ -47,4 +50,3 @@ jobs:
           git commit -m "update_seen_mints"
           git pull --rebase origin main
           git push
-
